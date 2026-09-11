@@ -199,6 +199,46 @@ func TestWALDir(t *testing.T) {
 	}
 }
 
+func TestValidateStorage(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ServerConfig
+		want string
+	}{
+		{
+			name: "bbolt",
+			cfg:  ServerConfig{Backend: StorageBackendBbolt},
+		},
+		{
+			name: "missing backend",
+			cfg:  ServerConfig{},
+			want: `storage backend must be "bbolt" or "pebble", got ""`,
+		},
+		{
+			name: "Pebble",
+			cfg:  ServerConfig{Backend: StorageBackendPebble},
+		},
+		{
+			name: "unknown backend",
+			cfg: ServerConfig{
+				Backend: "unknown",
+			},
+			want: `storage backend must be "bbolt" or "pebble", got "unknown"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.ValidateStorage()
+			if tt.want == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tt.want)
+		})
+	}
+}
+
 func TestShouldDiscover(t *testing.T) {
 	tests := map[string]bool{
 		"":                              false,

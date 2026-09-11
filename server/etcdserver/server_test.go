@@ -698,6 +698,7 @@ func TestSnapshotOrdering(t *testing.T) {
 		DataDir:                testdir,
 		SnapshotCatchUpEntries: DefaultSnapshotCatchUpEntries,
 		ServerFeatureGate:      features.NewDefaultServerFeatureGate("test", lg),
+		Backend:                config.StorageBackendBbolt,
 	}
 
 	s := &EtcdServer{
@@ -794,6 +795,7 @@ func TestConcurrentApplyAndSnapshotV3(t *testing.T) {
 			DataDir:                testdir,
 			SnapshotCatchUpEntries: DefaultSnapshotCatchUpEntries,
 			ServerFeatureGate:      features.NewDefaultServerFeatureGate("test", lg),
+			Backend:                config.StorageBackendBbolt,
 		},
 		r:                 *r,
 		snapshotter:       snap.New(lg, testdir),

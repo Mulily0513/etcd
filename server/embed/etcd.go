@@ -204,6 +204,7 @@ func StartEtcd(inCfg *Config) (e *Etcd, err error) {
 		AutoCompactionMode:                cfg.AutoCompactionMode,
 		QuotaBackendBytes:                 cfg.QuotaBackendBytes,
 		BackendBatchLimit:                 cfg.BackendBatchLimit,
+		Backend:                           cfg.Backend,
 		BackendFreelistType:               backendFreelistType,
 		BackendBatchInterval:              cfg.BackendBatchInterval,
 		MaxTxnOps:                         cfg.MaxTxnOps,
@@ -422,9 +423,10 @@ func (e *Etcd) Close() {
 	defer func() {
 		lg.Info("closed etcd server", fields...)
 		verify.MustVerifyIfEnabled(verify.Config{
-			Logger:     lg,
-			DataDir:    e.cfg.Dir,
-			ExactIndex: false,
+			Logger:         lg,
+			DataDir:        e.cfg.Dir,
+			ExactIndex:     false,
+			StorageBackend: e.cfg.Backend,
 		})
 		lg.Sync()
 	}()

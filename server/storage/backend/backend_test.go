@@ -51,6 +51,7 @@ func TestBackendClose(t *testing.T) {
 }
 
 func TestBackendSnapshot(t *testing.T) {
+	betesting.RequireBbolt(t)
 	b, _ := betesting.NewTmpBackend(t, time.Hour, 10000)
 	defer betesting.Close(t, b)
 
@@ -89,6 +90,7 @@ func TestBackendSnapshot(t *testing.T) {
 }
 
 func TestBackendBatchIntervalCommit(t *testing.T) {
+	betesting.RequireBbolt(t)
 	// start backend with super short batch interval so
 	// we do not need to wait long before commit to happen.
 	b, _ := betesting.NewTmpBackend(t, time.Nanosecond, 10000)
@@ -125,6 +127,7 @@ func TestBackendBatchIntervalCommit(t *testing.T) {
 }
 
 func TestBackendDefrag(t *testing.T) {
+	betesting.RequireBbolt(t)
 	bcfg := backend.DefaultBackendConfig(zaptest.NewLogger(t))
 	// Make sure we change BackendFreelistType
 	// The goal is to verify that we restore config option after defrag.

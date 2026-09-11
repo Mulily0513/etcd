@@ -21,9 +21,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap/zaptest"
 
-	"go.etcd.io/etcd/server/v3/storage/backend"
 	betesting "go.etcd.io/etcd/server/v3/storage/backend/testing"
 	"go.etcd.io/etcd/server/v3/storage/schema"
 )
@@ -45,7 +43,6 @@ func TestScheduledCompact(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(fmt.Sprint(tc.value), func(t *testing.T) {
-			lg := zaptest.NewLogger(t)
 			be, tmpPath := betesting.NewTmpBackend(t, time.Microsecond, 10)
 			tx := be.BatchTx()
 			if tx == nil {
@@ -58,7 +55,7 @@ func TestScheduledCompact(t *testing.T) {
 			be.ForceCommit()
 			be.Close()
 
-			b := backend.NewDefaultBackend(lg, tmpPath)
+			b := betesting.OpenBackendAtPath(t, tmpPath)
 			defer b.Close()
 			v, found := UnsafeReadScheduledCompact(b.BatchTx())
 			assert.True(t, found)
@@ -84,7 +81,6 @@ func TestFinishedCompact(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(fmt.Sprint(tc.value), func(t *testing.T) {
-			lg := zaptest.NewLogger(t)
 			be, tmpPath := betesting.NewTmpBackend(t, time.Microsecond, 10)
 			tx := be.BatchTx()
 			if tx == nil {
@@ -97,7 +93,7 @@ func TestFinishedCompact(t *testing.T) {
 			be.ForceCommit()
 			be.Close()
 
-			b := backend.NewDefaultBackend(lg, tmpPath)
+			b := betesting.OpenBackendAtPath(t, tmpPath)
 			defer b.Close()
 			v, found := UnsafeReadFinishedCompact(b.BatchTx())
 			assert.True(t, found)

@@ -21,6 +21,8 @@ import (
 
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/client/pkg/v3/verify"
+	serverconfig "go.etcd.io/etcd/server/v3/config"
+	serverstorage "go.etcd.io/etcd/server/v3/storage"
 	"go.etcd.io/etcd/server/v3/storage/backend"
 	"go.etcd.io/etcd/server/v3/storage/datadir"
 	"go.etcd.io/etcd/server/v3/storage/schema"
@@ -41,6 +43,8 @@ type Config struct {
 	ExactIndex bool
 
 	Logger *zap.Logger
+
+	StorageBackend serverconfig.StorageBackend
 }
 
 // Verify performs consistency checks of given etcd data-directory.
@@ -74,7 +78,11 @@ func Verify(cfg Config) (retErr error) {
 		}
 	}()
 
-	be := backend.NewDefaultBackend(lg, datadir.ToBackendFileName(cfg.DataDir))
+	be := serverstorage.OpenBackend(serverconfig.ServerConfig{
+		DataDir: cfg.DataDir,
+		Backend: cfg.StorageBackend,
+		Logger:  lg,
+	}, nil)
 	defer be.Close()
 
 	snapshot, hardstate, err := validateWAL(cfg)

@@ -167,22 +167,11 @@ func TestBatchTxCommit(t *testing.T) {
 
 	tx.Commit()
 
-	// check whether put happens via db view
-	backend.DbFromBackendForTest(b).View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(schema.Test.Name())
-		if bucket == nil {
-			t.Errorf("bucket test does not exit")
-			return nil
-		}
-		v := bucket.Get([]byte("foo"))
-		if v == nil {
-			t.Errorf("foo key failed to written in backend")
-		}
-		return nil
-	})
+	assertBackendValue(t, b)
 }
 
 func TestBatchTxBatchLimitCommit(t *testing.T) {
+	betesting.RequireBbolt(t)
 	// start backend with batch limit 1 so one write can
 	// trigger a commit
 	b, _ := betesting.NewTmpBackend(t, time.Hour, 1)
@@ -208,6 +197,19 @@ func TestBatchTxBatchLimitCommit(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func assertBackendValue(t *testing.T, b backend.Backend) {
+	t.Helper()
+	rtx := b.ConcurrentReadTx()
+	defer rtx.RUnlock()
+	keys, values := rtx.UnsafeRange(schema.Test, []byte("foo"), nil, 0)
+	if !reflect.DeepEqual(keys, [][]byte{[]byte("foo")}) {
+		t.Errorf("keys = %v, want foo", keys)
+	}
+	if !reflect.DeepEqual(values, [][]byte{[]byte("bar")}) {
+		t.Errorf("values = %v, want bar", values)
+	}
 }
 
 func TestRangeAfterDeleteBucketMatch(t *testing.T) {

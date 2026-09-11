@@ -38,6 +38,16 @@ const (
 	grpcOverheadBytes = 512 * 1024
 )
 
+// StorageBackend identifies the physical storage implementation used by the
+// embedded server. Backend-specific recovery and snapshot behavior is owned
+// by the selected backend rather than by a global server recovery mode.
+type StorageBackend string
+
+const (
+	StorageBackendBbolt  StorageBackend = "bbolt"
+	StorageBackendPebble StorageBackend = "pebble"
+)
+
 // ServerConfig holds the configuration of etcd as taken from the command line or discovery.
 type ServerConfig struct {
 	Name string
@@ -66,7 +76,9 @@ type ServerConfig struct {
 	BackendBatchInterval time.Duration
 	// BackendBatchLimit is the maximum operations before commit the backend transaction.
 	BackendBatchLimit int
-
+	// Backend selects the physical storage implementation. The selected
+	// backend owns its backend-specific recovery and snapshot behavior.
+	Backend StorageBackend `json:"storage-backend"`
 	// BackendFreelistType is the type of the backend boltdb freelist.
 	BackendFreelistType bolt.FreelistType
 
@@ -200,6 +212,17 @@ type ServerConfig struct {
 
 	// Metrics types of metrics - should be either 'basic' or 'extensive'
 	Metrics string
+}
+
+// ValidateStorage checks that the selected physical backend and its options
+// form a supported combination.
+func (c ServerConfig) ValidateStorage() error {
+	switch c.Backend {
+	case StorageBackendBbolt, StorageBackendPebble:
+	default:
+		return fmt.Errorf("storage backend must be %q or %q, got %q", StorageBackendBbolt, StorageBackendPebble, c.Backend)
+	}
+	return nil
 }
 
 // VerifyBootstrap sanity-checks the initial config for bootstrap case

@@ -1,0 +1,141 @@
+x-etcd-resources: &etcd-resources
+  # Keep both benchmark modes on the same local resource envelope. The values
+  # can be overridden for a different host, but must remain identical across
+  # bbolt and Pebble runs.
+  cpus: ${UNIFIED_RAFT_LSM_CPUS:-2.0}
+  mem_limit: ${UNIFIED_RAFT_LSM_MEMORY:-1g}
+
+services:
+  etcd1:
+    <<: *etcd-resources
+    build:
+      context: ../..
+      dockerfile: tools/perf/Dockerfile
+      args:
+        BUILDER_IMAGE: ${UNIFIED_RAFT_LSM_BUILDER_IMAGE:-golang:1.26-bookworm}
+        RUNTIME_IMAGE: ${UNIFIED_RAFT_LSM_RUNTIME_IMAGE:-debian:bookworm-slim}
+    image: fastecd-etcd-perf:local
+    hostname: etcd1
+    command: &etcd-command
+      - --name=etcd1
+      - --data-dir=/var/lib/etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd1:2379
+      - --listen-metrics-urls=http://0.0.0.0:2381
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd1:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=fastecd-etcd-perf
+      - --storage-backend=${STORAGE_BACKEND:-pebble}
+      - --backend-batch-interval=${BACKEND_BATCH_INTERVAL:-0s}
+    ports:
+      - "12379:2379"
+      - "12380:2380"
+    volumes:
+      - etcd1_data:/var/lib/etcd
+    networks: [raftnet]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 1s
+
+  etcd2:
+    <<: *etcd-resources
+    build:
+      context: ../..
+      dockerfile: tools/perf/Dockerfile
+      args:
+        BUILDER_IMAGE: ${UNIFIED_RAFT_LSM_BUILDER_IMAGE:-golang:1.26-bookworm}
+        RUNTIME_IMAGE: ${UNIFIED_RAFT_LSM_RUNTIME_IMAGE:-debian:bookworm-slim}
+    image: fastecd-etcd-perf:local
+    hostname: etcd2
+    command:
+      - --name=etcd2
+      - --data-dir=/var/lib/etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd2:2379
+      - --listen-metrics-urls=http://0.0.0.0:2381
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd2:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=fastecd-etcd-perf
+      - --storage-backend=${STORAGE_BACKEND:-pebble}
+      - --backend-batch-interval=${BACKEND_BATCH_INTERVAL:-0s}
+    ports:
+      - "22379:2379"
+      - "22380:2380"
+    volumes:
+      - etcd2_data:/var/lib/etcd
+    networks: [raftnet]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 1s
+
+  etcd3:
+    <<: *etcd-resources
+    build:
+      context: ../..
+      dockerfile: tools/perf/Dockerfile
+      args:
+        BUILDER_IMAGE: ${UNIFIED_RAFT_LSM_BUILDER_IMAGE:-golang:1.26-bookworm}
+        RUNTIME_IMAGE: ${UNIFIED_RAFT_LSM_RUNTIME_IMAGE:-debian:bookworm-slim}
+    image: fastecd-etcd-perf:local
+    hostname: etcd3
+    command:
+      - --name=etcd3
+      - --data-dir=/var/lib/etcd
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd3:2379
+      - --listen-metrics-urls=http://0.0.0.0:2381
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd3:2380
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=fastecd-etcd-perf
+      - --storage-backend=${STORAGE_BACKEND:-pebble}
+      - --backend-batch-interval=${BACKEND_BATCH_INTERVAL:-0s}
+    ports:
+      - "32379:2379"
+      - "32380:2380"
+    volumes:
+      - etcd3_data:/var/lib/etcd
+    networks: [raftnet]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "status"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    stop_grace_period: 1s
+
+  runner:
+    image: fastecd-etcd-perf:local
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
+    volumes:
+      - etcd1_data:/data/etcd1
+      - etcd2_data:/data/etcd2
+      - etcd3_data:/data/etcd3
+      - ./results:/results
+    networks: [raftnet]
+    depends_on:
+      etcd1:
+        condition: service_healthy
+      etcd2:
+        condition: service_healthy
+      etcd3:
+        condition: service_healthy
+
+networks:
+  raftnet:
+
+volumes:
+  etcd1_data:
+  etcd2_data:
+  etcd3_data:

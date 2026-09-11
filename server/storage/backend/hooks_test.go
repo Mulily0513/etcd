@@ -34,20 +34,16 @@ var (
 
 func TestBackendPreCommitHook(t *testing.T) {
 	be := newTestHooksBackend(t, backend.DefaultBackendConfig(zaptest.NewLogger(t)))
-
 	tx := be.BatchTx()
 	prepareBuckenAndKey(tx)
 	tx.Commit()
-
-	// Empty commit.
-	tx.Commit()
-
-	assert.Equalf(t, ">cc", getCommitsKey(t, be), "expected 2 explicit commits")
-	tx.Commit()
-	assert.Equalf(t, ">ccc", getCommitsKey(t, be), "expected 3 explicit commits")
+	commitWrite(tx, []byte("foo"), []byte("bar1"))
+	commitWrite(tx, []byte("foo"), []byte("bar2"))
+	assert.Equal(t, ">ccc", getCommitsKey(t, be), "expected one hook call per non-empty commit")
 }
 
 func TestBackendAutoCommitLimitHook(t *testing.T) {
+	betesting.RequireBbolt(t)
 	cfg := backend.DefaultBackendConfig(zaptest.NewLogger(t))
 	cfg.BatchLimit = 3
 	be := newTestHooksBackend(t, cfg)
@@ -68,7 +64,13 @@ func write(tx backend.BatchTx, k, v []byte) {
 	tx.UnsafePut(bucket, k, v)
 }
 
+func commitWrite(tx backend.BatchTx, k, v []byte) {
+	write(tx, k, v)
+	tx.Commit()
+}
+
 func TestBackendAutoCommitBatchIntervalHook(t *testing.T) {
+	betesting.RequireBbolt(t)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 

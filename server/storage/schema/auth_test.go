@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
-	"go.etcd.io/etcd/server/v3/storage/backend"
 	betesting "go.etcd.io/etcd/server/v3/storage/backend/testing"
 )
 
@@ -66,7 +65,7 @@ func TestAuthEnabled(t *testing.T) {
 			abe.ForceCommit()
 			be.Close()
 
-			be2 := backend.NewDefaultBackend(lg, tmpPath)
+			be2 := betesting.OpenBackendAtPath(t, tmpPath)
 			defer be2.Close()
 			abe2 := NewAuthBackend(lg, be2)
 			tx = abe2.BatchTx()
@@ -117,7 +116,7 @@ func TestAuthRevision(t *testing.T) {
 			abe.ForceCommit()
 			be.Close()
 
-			be2 := backend.NewDefaultBackend(lg, tmpPath)
+			be2 := betesting.OpenBackendAtPath(t, tmpPath)
 			defer be2.Close()
 			abe2 := NewAuthBackend(lg, be2)
 			tx := abe2.BatchTx()

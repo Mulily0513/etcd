@@ -51,6 +51,9 @@ import (
 )
 
 func bootstrap(cfg config.ServerConfig) (b *bootstrappedServer, err error) {
+	if err := cfg.ValidateStorage(); err != nil {
+		return nil, err
+	}
 	if cfg.MaxRequestBytes > recommendedMaxRequestBytes {
 		cfg.Logger.Warn(
 			"exceeded recommended request limit",

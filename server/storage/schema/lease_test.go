@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"go.uber.org/zap/zaptest"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"go.etcd.io/etcd/server/v3/lease/leasepb"
@@ -89,7 +88,6 @@ func TestLeaseBackend(t *testing.T) {
 
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			lg := zaptest.NewLogger(t)
 			be, tmpPath := betesting.NewTmpBackend(t, time.Microsecond, 10)
 			tx := be.BatchTx()
 			tx.Lock()
@@ -100,7 +98,7 @@ func TestLeaseBackend(t *testing.T) {
 			be.ForceCommit()
 			be.Close()
 
-			be2 := backend.NewDefaultBackend(lg, tmpPath)
+			be2 := betesting.OpenBackendAtPath(t, tmpPath)
 			defer be2.Close()
 			leases := MustUnsafeGetAllLeases(be2.ReadTx())
 

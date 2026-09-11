@@ -95,6 +95,7 @@ func TestBootstrapExistingClusterNoWALMaxLearner(t *testing.T) {
 				InitialPeerURLsMap: cluster,
 				Logger:             zaptest.NewLogger(t),
 				MaxLearners:        tt.maxLearner,
+				Backend:            config.StorageBackendBbolt,
 			}
 			_, err = bootstrapExistingClusterNoWAL(cfg, mockBootstrapRoundTrip(tt.members))
 			hasError := err != nil
@@ -181,6 +182,7 @@ func TestBootstrapBackend(t *testing.T) {
 				DataDir:             dataDir,
 				BackendFreelistType: bolt.FreelistArrayType,
 				Logger:              zaptest.NewLogger(t),
+				Backend:             config.StorageBackendBbolt,
 			}
 
 			if tt.prepareData != nil {

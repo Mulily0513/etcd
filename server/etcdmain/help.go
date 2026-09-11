@@ -85,6 +85,8 @@ Member:
     BackendBatchInterval is the maximum time before commit the backend transaction.
   --backend-batch-limit '0'
     BackendBatchLimit is the maximum operations before commit the backend transaction.
+  --storage-backend 'bbolt'
+    Physical storage backend: bbolt or pebble.
   --max-txn-ops '128'
     Maximum number of operations permitted in a transaction.
   --max-request-bytes '1572864'
