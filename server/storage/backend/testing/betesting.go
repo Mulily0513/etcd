@@ -23,7 +23,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 
+	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/storage/backend"
+	pebblebackend "go.etcd.io/etcd/server/v3/storage/backend/pebble"
 )
 
 func NewTmpBackendFromCfg(tb testing.TB, bcfg backend.BackendConfig) (backend.Backend, string) {
@@ -34,7 +36,7 @@ func NewTmpBackendFromCfg(tb testing.TB, bcfg backend.BackendConfig) (backend.Ba
 	tmpPath := filepath.Join(dir, "database")
 	bcfg.Path = tmpPath
 	bcfg.Logger = zaptest.NewLogger(tb)
-	return backend.New(bcfg), tmpPath
+	return openBackend(tb, tmpPath, bcfg), tmpPath
 }
 
 // NewTmpBackend creates a backend implementation for testing.
@@ -46,6 +48,64 @@ func NewTmpBackend(tb testing.TB, batchInterval time.Duration, batchLimit int) (
 
 func NewDefaultTmpBackend(tb testing.TB) (backend.Backend, string) {
 	return NewTmpBackendFromCfg(tb, backend.DefaultBackendConfig(zaptest.NewLogger(tb)))
+}
+
+// OpenBackendAtPath opens the backend selected by ETCD_TEST_STORAGE_BACKEND.
+// It is used by tests that close and reopen the same backend path.
+func OpenBackendAtPath(tb testing.TB, path string) backend.Backend {
+	tb.Helper()
+	bcfg := backend.DefaultBackendConfig(zaptest.NewLogger(tb))
+	bcfg.Path = path
+	return openBackend(tb, path, bcfg)
+}
+
+// ConfiguredBackend is the backend selected for backend-aware unit tests.
+
+func ConfiguredBackend(tb testing.TB) config.StorageBackend {
+	tb.Helper()
+	configured := config.StorageBackend(os.Getenv("ETCD_TEST_STORAGE_BACKEND"))
+	if configured == "" {
+		return config.StorageBackendBbolt
+	}
+	if _, ok := backendOpeners[configured]; !ok {
+		tb.Fatalf("unsupported ETCD_TEST_STORAGE_BACKEND=%q", configured)
+	}
+	return configured
+}
+
+type backendOpener func(testing.TB, backend.BackendConfig) backend.Backend
+
+var backendOpeners = map[config.StorageBackend]backendOpener{
+	config.StorageBackendBbolt: func(_ testing.TB, bcfg backend.BackendConfig) backend.Backend {
+		return backend.New(bcfg)
+	},
+	config.StorageBackendPebble: func(tb testing.TB, bcfg backend.BackendConfig) backend.Backend {
+		be, err := pebblebackend.Open(pebblebackend.Config{
+			Path:          bcfg.Path,
+			BatchInterval: bcfg.BatchInterval,
+			BatchLimit:    bcfg.BatchLimit,
+			UnsafeNoFsync: bcfg.UnsafeNoFsync,
+			Logger:        bcfg.Logger,
+			Hooks:         bcfg.Hooks,
+		})
+		if err != nil {
+			tb.Fatalf("failed to open Pebble test backend: %v", err)
+		}
+		return be
+	},
+}
+
+func openBackend(tb testing.TB, path string, bcfg backend.BackendConfig) backend.Backend {
+	bcfg.Path = path
+	return backendOpeners[ConfiguredBackend(tb)](tb, bcfg)
+}
+
+// RequireBbolt skips tests that exercise bbolt-only file or batching details.
+func RequireBbolt(tb testing.TB) {
+	tb.Helper()
+	if ConfiguredBackend(tb) != config.StorageBackendBbolt {
+		tb.Skip("test requires the bbolt backend")
+	}
 }
 
 func Close(tb testing.TB, b backend.Backend) {

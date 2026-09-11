@@ -21,10 +21,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
-
 	"go.etcd.io/bbolt"
-	"go.etcd.io/etcd/server/v3/storage/backend"
 	betesting "go.etcd.io/etcd/server/v3/storage/backend/testing"
 )
 
@@ -57,7 +54,6 @@ func TestVersion(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.version, func(t *testing.T) {
-			lg := zaptest.NewLogger(t)
 			be, tmpPath := betesting.NewTmpBackend(t, time.Microsecond, 10)
 			tx := be.BatchTx()
 			require.NotNilf(t, tx, "batch tx is nil")
@@ -68,7 +64,7 @@ func TestVersion(t *testing.T) {
 			be.ForceCommit()
 			be.Close()
 
-			b := backend.NewDefaultBackend(lg, tmpPath)
+			b := betesting.OpenBackendAtPath(t, tmpPath)
 			defer b.Close()
 			v := UnsafeReadStorageVersion(b.BatchTx())
 
@@ -79,6 +75,7 @@ func TestVersion(t *testing.T) {
 
 // TestVersionSnapshot ensures that UnsafeSetStorageVersion/unsafeReadStorageVersionFromSnapshot work well together.
 func TestVersionSnapshot(t *testing.T) {
+	betesting.RequireBbolt(t)
 	tcs := []struct {
 		version       string
 		expectVersion string

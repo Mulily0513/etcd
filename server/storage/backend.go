@@ -24,11 +24,34 @@ import (
 	"go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/etcd/server/v3/storage/backend"
+	pebblebackend "go.etcd.io/etcd/server/v3/storage/backend/pebble"
 	"go.etcd.io/etcd/server/v3/storage/schema"
 	"go.etcd.io/raft/v3/raftpb"
 )
 
+// LSMFlushable describes an LSM backend that can establish a durable
+// Raft-index boundary when its own WAL is disabled.
+type LSMFlushable interface {
+	LSMFlushIndex() uint64
+	FlushTo(uint64) error
+}
+
+type backendOpener func(config.ServerConfig, backend.Hooks) backend.Backend
+
+var backendOpeners = map[config.StorageBackend]backendOpener{
+	config.StorageBackendBbolt:  openBboltBackend,
+	config.StorageBackendPebble: openPebbleBackend,
+}
+
 func newBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
+	opener, ok := backendOpeners[cfg.Backend]
+	if !ok {
+		panic(fmt.Sprintf("unsupported storage backend %q", cfg.Backend))
+	}
+	return opener(cfg, hooks)
+}
+
+func openBboltBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
 	bcfg := backend.DefaultBackendConfig(cfg.Logger)
 	bcfg.Path = cfg.BackendPath()
 	bcfg.UnsafeNoFsync = cfg.UnsafeNoFsync
@@ -55,16 +78,90 @@ func newBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
 	return backend.New(bcfg)
 }
 
-// OpenSnapshotBackend renames a snapshot db to the current etcd db and opens it.
-func OpenSnapshotBackend(cfg config.ServerConfig, ss *snap.Snapshotter, snapshot *raftpb.Snapshot, hooks *BackendHooks) (backend.Backend, error) {
+func openPebbleBackend(cfg config.ServerConfig, hooks backend.Hooks) backend.Backend {
+	batchInterval := cfg.BackendBatchInterval
+	if batchInterval == 0 {
+		batchInterval = pebblebackend.DefaultBatchInterval
+	}
+	be, err := pebblebackend.Open(pebblebackend.Config{
+		Path:             cfg.BackendPath(),
+		BatchInterval:    batchInterval,
+		BatchLimit:       cfg.BackendBatchLimit,
+		DisableWAL:       true,
+		UnsafeNoFsync:    cfg.UnsafeNoFsync,
+		LazySnapshotSize: true,
+		UseEstimatedSize: true,
+		Logger:           cfg.Logger,
+		Hooks:            hooks,
+	})
+	if err != nil {
+		if cfg.Logger != nil {
+			cfg.Logger.Panic("failed to open Pebble backend", zap.String("path", cfg.BackendPath()), zap.Error(err))
+		}
+		panic(err)
+	}
+	return be
+}
+
+// OpenSnapshotBackend replaces the current backend with the database from a
+// Raft snapshot. The second return value is the previous backend when it can
+// retain the original asynchronous close behavior; it is nil when the
+// replacement path had to close it before opening the new backend.
+func OpenSnapshotBackend(cfg config.ServerConfig, oldbe backend.Backend, ss *snap.Snapshotter, snapshot *raftpb.Snapshot, hooks *BackendHooks) (backend.Backend, backend.Backend, error) {
 	snapPath, err := ss.DBFilePath(snapshot.Metadata.GetIndex())
 	if err != nil {
-		return nil, fmt.Errorf("failed to find database snapshot file (%w)", err)
+		return nil, oldbe, fmt.Errorf("failed to find database snapshot file (%w)", err)
 	}
+	switch cfg.Backend {
+	case config.StorageBackendBbolt:
+		return openBboltSnapshotBackend(cfg, oldbe, snapPath, hooks)
+	case config.StorageBackendPebble:
+		return openPebbleSnapshotBackend(cfg, oldbe, snapPath, hooks)
+	default:
+		return nil, oldbe, fmt.Errorf("unsupported storage backend %q", cfg.Backend)
+	}
+}
+
+func openBboltSnapshotBackend(cfg config.ServerConfig, oldbe backend.Backend, snapPath string, hooks *BackendHooks) (backend.Backend, backend.Backend, error) {
 	if err := os.Rename(snapPath, cfg.BackendPath()); err != nil {
-		return nil, fmt.Errorf("failed to rename database snapshot file (%w)", err)
+		return nil, oldbe, fmt.Errorf("failed to rename database snapshot file (%w)", err)
 	}
-	return OpenBackend(cfg, hooks), nil
+	return OpenBackend(cfg, hooks), oldbe, nil
+}
+
+func openPebbleSnapshotBackend(cfg config.ServerConfig, oldbe backend.Backend, snapPath string, hooks *BackendHooks) (backend.Backend, backend.Backend, error) {
+	if oldbe != nil {
+		// Keep the live Pebble instance. Replacing its contents in one native
+		// batch preserves existing read snapshots and avoids closing the DB
+		// while an in-flight request still owns a read transaction.
+		// The live etcd Pebble backend has WAL disabled. The replacement
+		// helper performs an explicit Flush after the batch commit, so the
+		// commit itself must use Pebble's NoSync option.
+		if err := pebblebackend.RestoreSnapshotIntoBackend(oldbe, snapPath, false); err != nil {
+			return nil, oldbe, fmt.Errorf("failed to restore Pebble database snapshot (%w)", err)
+		}
+		if err := os.Remove(snapPath); err != nil && !os.IsNotExist(err) {
+			return nil, oldbe, fmt.Errorf("failed to remove Pebble database snapshot (%w)", err)
+		}
+		return oldbe, nil, nil
+	}
+	// Startup recovery has no live backend to preserve. Restore the generic
+	// snapshot stream into the configured Pebble directory.
+	oldPath := cfg.BackendPath()
+	oldPathBackup := oldPath + ".old"
+	if _, statErr := os.Stat(oldPath); statErr == nil {
+		_ = os.RemoveAll(oldPathBackup)
+		if err := os.Rename(oldPath, oldPathBackup); err != nil {
+			return nil, oldbe, fmt.Errorf("failed to move old Pebble backend (%w)", err)
+		}
+	}
+	if err := pebblebackend.RestoreSnapshot(snapPath, oldPath, true); err != nil {
+		return nil, oldbe, fmt.Errorf("failed to restore Pebble database snapshot (%w)", err)
+	}
+	if err := os.Remove(snapPath); err != nil && !os.IsNotExist(err) {
+		return nil, oldbe, fmt.Errorf("failed to remove Pebble database snapshot (%w)", err)
+	}
+	return OpenBackend(cfg, hooks), nil, nil
 }
 
 // OpenBackend returns a backend using the current etcd db.
@@ -110,5 +207,6 @@ func RecoverSnapshotBackend(cfg config.ServerConfig, oldbe backend.Backend, snap
 	}
 	cfg.Logger.Info("Recovering from snapshot backend", zap.Uint64("consistent-index", consistentIndex), zap.Uint64("snapshot-index", snapshot.Metadata.GetIndex()))
 	oldbe.Close()
-	return OpenSnapshotBackend(cfg, snap.New(cfg.Logger, cfg.SnapDir()), snapshot, hooks)
+	newbe, _, err := OpenSnapshotBackend(cfg, nil, snap.New(cfg.Logger, cfg.SnapDir()), snapshot, hooks)
+	return newbe, err
 }

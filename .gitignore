@@ -35,3 +35,4 @@ hack/tls-setup/certs
 /tools/benchmark/benchmark
 /out
 /etcd-dump-logs
+/tools/perf/results/

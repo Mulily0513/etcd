@@ -45,6 +45,7 @@ import (
 	"go.etcd.io/etcd/pkg/v3/featuregate"
 	"go.etcd.io/etcd/pkg/v3/flags"
 	"go.etcd.io/etcd/pkg/v3/netutil"
+	serverconfig "go.etcd.io/etcd/server/v3/config"
 	"go.etcd.io/etcd/server/v3/etcdserver"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/membership"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/rafthttp"
@@ -220,6 +221,9 @@ type Config struct {
 	BackendBatchInterval time.Duration `json:"backend-batch-interval"`
 	// BackendBatchLimit is the maximum operations before commit the backend transaction.
 	BackendBatchLimit int `json:"backend-batch-limit"`
+	// Backend selects the physical storage implementation. The selected
+	// backend owns its backend-specific recovery and snapshot behavior.
+	Backend serverconfig.StorageBackend `json:"storage-backend"`
 	// BackendFreelistType specifies the type of freelist that boltdb backend uses (array and map are supported types).
 	BackendFreelistType string `json:"backend-bbolt-freelist-type"`
 	QuotaBackendBytes   int64  `json:"quota-backend-bytes"`
@@ -497,7 +501,8 @@ func NewConfig() *Config {
 	cfg := &Config{
 		MaxWalFiles: DefaultMaxWALs,
 
-		Name: DefaultName,
+		Name:    DefaultName,
+		Backend: serverconfig.StorageBackendBbolt,
 
 		SnapshotCount:          etcdserver.DefaultSnapshotCount,
 		SnapshotCatchUpEntries: etcdserver.DefaultSnapshotCatchUpEntries,
@@ -617,6 +622,7 @@ func (cfg *Config) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cfg.BackendFreelistType, "backend-bbolt-freelist-type", cfg.BackendFreelistType, "BackendFreelistType specifies the type of freelist that boltdb backend uses(array and map are supported types)")
 	fs.DurationVar(&cfg.BackendBatchInterval, "backend-batch-interval", cfg.BackendBatchInterval, "BackendBatchInterval is the maximum time before commit the backend transaction.")
 	fs.IntVar(&cfg.BackendBatchLimit, "backend-batch-limit", cfg.BackendBatchLimit, "BackendBatchLimit is the maximum operations before commit the backend transaction.")
+	fs.StringVar((*string)(&cfg.Backend), "storage-backend", string(cfg.Backend), "Physical storage backend: bbolt or pebble.")
 	fs.UintVar(&cfg.MaxTxnOps, "max-txn-ops", cfg.MaxTxnOps, "Maximum number of operations permitted in a transaction.")
 	fs.UintVar(&cfg.MaxRequestBytes, "max-request-bytes", cfg.MaxRequestBytes, "Maximum client request size in bytes the server will accept.")
 	fs.DurationVar(&cfg.GRPCKeepAliveMinTime, "grpc-keepalive-min-time", cfg.GRPCKeepAliveMinTime, "Minimum interval duration that a client should wait before pinging server.")

@@ -797,8 +797,6 @@ func (s *EtcdServer) run() {
 			}
 		},
 	}
-	s.r.start(rh)
-
 	ep := etcdProgress{
 		confState:           sn.Metadata.ConfState,
 		diskSnapshotIndex:   sn.Metadata.GetIndex(),
@@ -809,6 +807,14 @@ func (s *EtcdServer) run() {
 	if ep.confState == nil {
 		panic("empty confstate")
 	}
+
+	// Pebble runs without its own WAL. Its completed flush marker is therefore
+	// the durable record of how far the backend has applied Raft entries. Restore
+	// that boundary before starting Raft/apply so entries already present in the
+	// backend are not replayed as if they were still unapplied. Backends without
+	// this optional durability contract keep the ordinary etcd startup path.
+	s.maybeUpdateRestoreBoundaryFromLSM(&ep)
+	s.r.start(rh)
 
 	defer func() {
 		s.wgMu.Lock() // block concurrent waitgroup adds in GoAttach while stopping
@@ -849,6 +855,63 @@ func (s *EtcdServer) run() {
 			return
 		}
 	}
+}
+
+// maybeUpdateRestoreBoundaryFromLSM advances the startup apply boundary to
+// the last Raft index known to be included in a completed LSM flush. This is
+// needed only for backends that persist data without their own WAL: after a
+// restart, the backend's flush marker is the durable evidence that all entries
+// through that index are already reflected in the backend state. Ordinary etcd
+// and bbolt startup keep the original snapshot-based path.
+//
+// The indexes describe two different views of the same state:
+//
+//	snapshot index = the last index covered by the existing Raft snapshot;
+//	ep.appliedi    = the server's in-memory apply boundary, initially S;
+//	flush index    = the last index whose Pebble state and marker are durable.
+//
+//	S = snapshot index, F = flush index
+//
+//	Raft log:  ... ---- [S] ---------------- [F] ---- [next]
+//	startup:            ep.appliedi=S -> ep.appliedi=F -> r.start
+//	backend:            snapshot state  -> durable state through F
+//
+// Advancing ep.appliedi before r.start makes Raft replay only entries that are
+// not already represented by the durable Pebble state.
+func (s *EtcdServer) maybeUpdateRestoreBoundaryFromLSM(ep *etcdProgress) {
+	flushable, ok := s.Backend().(serverstorage.LSMFlushable)
+	if !ok {
+		return
+	}
+
+	flushIndex := flushable.LSMFlushIndex()
+	if flushIndex <= ep.appliedi {
+		return
+	}
+
+	term, err := s.r.raftStorage.Term(flushIndex)
+	if err != nil {
+		s.Logger().Panic(
+			"failed to get term for LSM flush boundary",
+			zap.Uint64("flush-index", flushIndex),
+			zap.Error(err),
+		)
+	}
+
+	ep.appliedi = flushIndex
+	ep.appliedt = term
+
+	// The boundary is already represented by durable backend data. Update the
+	// in-memory etcd progress only; normal Apply owns future backend updates.
+	s.consistIndex.SetConsistentIndex(flushIndex, term)
+	s.setAppliedIndex(flushIndex)
+	s.setTerm(term)
+
+	s.Logger().Info(
+		"restored LSM flush boundary",
+		zap.Uint64("flush-index", flushIndex),
+		zap.Uint64("term", term),
+	)
 }
 
 func (s *EtcdServer) revokeExpiredLeases(leases []*lease.Lease) {
@@ -1035,7 +1098,7 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 	}()
 
 	// gofail: var applyBeforeOpenSnapshot struct{}
-	newbe, err := serverstorage.OpenSnapshotBackend(s.Cfg, s.snapshotter, toApply.snapshot, s.beHooks)
+	newbe, oldbe, err := serverstorage.OpenSnapshotBackend(s.Cfg, s.be, s.snapshotter, toApply.snapshot, s.beHooks)
 	if err != nil {
 		lg.Panic("failed to open snapshot backend", zap.Error(err))
 	}
@@ -1069,23 +1132,24 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 
 	lg.Info("restored mvcc store", zap.Uint64("consistent-index", s.consistIndex.ConsistentIndex()))
 
-	oldbe := s.be
 	s.be = newbe
 	s.bemu.Unlock()
 	bemuUnlocked = true
 
-	// Closing old backend might block until all the txns
-	// on the backend are finished.
-	// We do not want to wait on closing the old backend.
-	go func() {
-		lg.Info("closing old backend file")
-		defer func() {
-			lg.Info("closed old backend file")
+	if oldbe != nil {
+		// Closing old backend might block until all the txns
+		// on the backend are finished.
+		// We do not want to wait on closing the old backend.
+		go func() {
+			lg.Info("closing old backend file")
+			defer func() {
+				lg.Info("closed old backend file")
+			}()
+			if err := oldbe.Close(); err != nil {
+				lg.Panic("failed to close old backend", zap.Error(err))
+			}
 		}()
-		if err := oldbe.Close(); err != nil {
-			lg.Panic("failed to close old backend", zap.Error(err))
-		}
-	}()
+	}
 
 	lg.Info("restoring alarm store")
 
@@ -1136,6 +1200,36 @@ func (s *EtcdServer) applySnapshot(ep *etcdProgress, toApply *toApply) {
 	// As backends and implementations like alarmsStore changed, we need
 	// to re-bootstrap Appliers.
 	s.uberApply = s.NewUberApplier()
+}
+
+// flushBackendForSnapshot gives optional backends a durability boundary before
+// the Raft snapshot and WAL can be released. For Pebble, FlushTo persists both
+// the current backend state and the applied Raft index represented by that
+// state. Ordinary backends, such as bbolt, already satisfy the required
+// boundary through their normal commit and do not implement this contract.
+//
+// For a disk snapshot at applied index N, the order is important:
+//
+//	apply through N
+//	    |
+//	    +-- KV().Commit  -> Pebble memtable: visible, but not a recovery boundary
+//	    +-- FlushTo(N)   -> backend data and the flush marker are durable
+//	    +-- CreateSnapshot/SaveSnap(N)
+//	    +-- Release      -> old WAL entries may be removed
+//
+// If FlushTo(N) were skipped, the WAL could be released while the backend's
+// durable marker still ended before N. A restart would then have neither a
+// durable backend state nor the WAL entries needed to recover the gap.
+// index is the applied Raft index whose backend state is being made durable.
+func (s *EtcdServer) flushBackendForSnapshot(index uint64) {
+	flushable, ok := s.Backend().(serverstorage.LSMFlushable)
+	if !ok {
+		return
+	}
+
+	if err := flushable.FlushTo(index); err != nil {
+		s.Logger().Panic("failed to flush backend before saving snapshot", zap.Error(err))
+	}
 }
 
 func (s *EtcdServer) NewUberApplier() apply.UberApplier {
@@ -2087,6 +2181,12 @@ func (s *EtcdServer) snapshot(ep *etcdProgress, toDisk bool) {
 		// So KV().Commit() cannot run in parallel with toApply. It has to be called outside
 		// the go routine created below.
 		s.KV().Commit()
+		// KV().Commit only commits the etcd transaction to the backend's current
+		// write buffer. Pebble has no WAL in server mode, so that buffer is not
+		// yet a recovery boundary. Flush the data and persist the applied Raft
+		// index before creating the snapshot; otherwise releasing the WAL below
+		// could remove the only durable copy of entries after the last LSM flush.
+		s.flushBackendForSnapshot(ep.appliedi)
 	}
 
 	snap, err := s.r.raftStorage.CreateSnapshot(ep.appliedi, ep.confState, nil)

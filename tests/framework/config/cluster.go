@@ -15,7 +15,10 @@
 package config
 
 import (
+	"os"
 	"time"
+
+	serverconfig "go.etcd.io/etcd/server/v3/config"
 )
 
 type TLSConfig string
@@ -42,6 +45,16 @@ type ClusterConfig struct {
 	// data is encoded or included; instead "e2e" or "integration"
 	// framework should decode or parse it separately.
 	ClusterContext any
+}
+
+// ConfiguredStorageBackend returns the backend selected for the test suite.
+// It uses the environment override when present and otherwise keeps the
+// historical bbolt default.
+func ConfiguredStorageBackend() serverconfig.StorageBackend {
+	if configured := os.Getenv("ETCD_TEST_STORAGE_BACKEND"); configured != "" {
+		return serverconfig.StorageBackend(configured)
+	}
+	return serverconfig.StorageBackendBbolt
 }
 
 func DefaultClusterConfig() ClusterConfig {

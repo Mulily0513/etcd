@@ -24,7 +24,6 @@ import (
 
 	"go.etcd.io/etcd/api/v3/authpb"
 	"go.etcd.io/etcd/server/v3/auth"
-	"go.etcd.io/etcd/server/v3/storage/backend"
 	betesting "go.etcd.io/etcd/server/v3/storage/backend/testing"
 )
 
@@ -111,7 +110,7 @@ func TestGetAllUsers(t *testing.T) {
 			abe.ForceCommit()
 			be.Close()
 
-			be2 := backend.NewDefaultBackend(lg, tmpPath)
+			be2 := betesting.OpenBackendAtPath(t, tmpPath)
 			defer be2.Close()
 			abe2 := NewAuthBackend(lg, be2)
 			users := abe2.ReadTx().UnsafeGetAllUsers()
@@ -198,7 +197,7 @@ func TestGetUser(t *testing.T) {
 			abe.ForceCommit()
 			be.Close()
 
-			be2 := backend.NewDefaultBackend(lg, tmpPath)
+			be2 := betesting.OpenBackendAtPath(t, tmpPath)
 			defer be2.Close()
 			abe2 := NewAuthBackend(lg, be2)
 			users := abe2.GetUser("alice")

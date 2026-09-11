@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -415,6 +416,9 @@ func NewEtcdProcessCluster(ctx context.Context, tb testing.TB, opts ...EPCluster
 // It doesn't start the cluster.
 func InitEtcdProcessCluster(tb testing.TB, cfg *EtcdProcessClusterConfig) (*EtcdProcessCluster, error) {
 	SkipInShortMode(tb)
+	if _, ok := os.LookupEnv("ETCD_TEST_STORAGE_BACKEND"); ok {
+		cfg.ServerConfig.Backend = config.ConfiguredStorageBackend()
+	}
 
 	if cfg.Logger == nil {
 		cfg.Logger = zaptest.NewLogger(tb)
